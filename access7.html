@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>活動進出管制系統 v3.0</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+    <style>
+        body { padding-bottom: 50px; background-color: #f8f9fa; }
+        .nav-section { display: none; }
+        .active-section { display: block; }
+        #reader { width: 100%; max-width: 500px; margin: 0 auto; background: #000; border-radius: 10px; overflow: hidden; }
+        .log-row { display: flex; border-bottom: 1px solid #dee2e6; padding: 8px 0; align-items: center; }
+        .log-col { flex: 1; padding: 0 10px; }
+        .dot { height: 12px; width: 12px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .bg-in { background-color: #28a745; }
+        .bg-out { background-color: #dc3545; }
+        .bg-none { background-color: #adb5bd; }
+        .status-badge { font-size: 0.8em; padding: 3px 8px; border-radius: 12px; }
+        .table-vcenter td { vertical-align: middle; }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-3">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="#">🏢 進出管制系統</a>
+        <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+        <div class="collapse navbar-collapse" id="navbarNav">
+            <ul class="navbar-nav ms-auto">
+                <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('section-list')">活動列表</a></li>
+                <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('section-create')">新增活動</a></li>
+                <li class="nav-item"><a class="nav-link" href="#" onclick="showSection('section-data')">資料管理</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<div class="container">
+    <div id="section-list" class="nav-section active-section">
+        <h3>📋 所有活動列表</h3>
+        <div id="eventListContainer" class="row"></div>
+    </div>
+
+    <div id="section-create" class="nav-section">
+        <h3 id="formTitle">➕ 新增活動</h3>
+        <div class="card p-3 mb-3">
+            <input type="hidden" id="editEventId">
+            <div class="mb-3"><label class="form-label">活動名稱</label><input type="text" class="form-control" id="eventName"></div>
+            <div class="mb-3"><label class="form-label">地點</label><input type="text" class="form-control" id="eventLoc"></div>
+            <div class="row">
+                <div class="col-md-6 mb-3"><label class="form-label">開始日期</label><input type="date" class="form-control" id="startDate" onchange="syncEndDate()"></div>
+                <div class="col-md-6 mb-3"><label class="form-label">結束日期</label><input type="date" class="form-control" id="endDate"></div>
+            </div>
+            <div class="mb-3"><label class="form-label">主辦單位</label><input type="text" class="form-control" id="eventOrg"></div>
+            <hr>
+            <div id="importArea">
+                <h5>匯入參加者名單 (Excel)</h5>
+                <input type="file" class="form-control mb-3" id="participantFile" accept=".xlsx, .xls">
+            </div>
+            <button class="btn btn-success w-100" onclick="saveEvent()">儲存活動</button>
+        </div>
+    </div>
+
+    <div id="section-detail" class="nav-section">
+        <button class="btn btn-secondary mb-3" onclick="showSection('section-list')">← 返回列表</button>
+        <h3 id="detailTitle">管理人員名單</h3>
+        <div class="card p-3 mb-3 shadow-sm">
+            <div class="d-flex gap-2 mb-3">
+                <button class="btn btn-primary" onclick="startControlMode()">🚀 進入進出管制模式</button>
+                <button class="btn btn-warning" onclick="downloadAllQRs()">⬇️ 打包下載 QR Code</button>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-hover table-vcenter text-center">
+                    <thead class="table-light"><tr><th>班級</th><th>座號</th><th>姓名</th><th>進出狀態</th><th>操作</th></tr></thead>
+                    <tbody id="participantTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="section-scan" class="nav-section">
+        <div class="d-flex justify-content-between mb-3">
+            <button class="btn btn-secondary" onclick="exitControlMode()">← 結束管制</button>
+            <button class="btn btn-outline-dark" onclick="showAllStatus()">👥 顯示目前全員狀態</button>
+        </div>
+        <h3 class="text-danger">📷 管制中：<span id="scanEventTitle"></span> <span class="badge bg-danger ms-2">場內：<span id="inVenueCount">0</span></span></h3>
+        <div class="row">
+            <div class="col-md-5">
+                <div id="reader"></div>
+                <div class="mt-3 text-center"><button class="btn btn-info" onclick="openTempModal()">＋ 臨時人員報到</button></div>
+                <div class="alert alert-secondary mt-3 text-center" id="scanResult">等待掃描...</div>
+            </div>
+            <div class="col-md-7">
+                <div class="card h-100">
+                    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                        <span>即時配對紀錄 (依進入時間排序)</span>
+                        </div>
+                    <div class="card-body p-0" style="height: 500px; overflow-y: auto;" id="scanLogContainer"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="section-all-status" class="nav-section">
+        <button class="btn btn-secondary mb-3" onclick="showSection('section-scan')">← 返回掃描頁面</button>
+        <h3 id="statusPageTitle">📋 目前人員即時狀態</h3>
+        <div class="table-responsive">
+            <table class="table table-bordered text-center">
+                <thead><tr><th>姓名 (班級-座號)</th><th>狀態</th><th>最後紀錄時間</th><th>操作</th></tr></thead>
+                <tbody id="statusTableBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="section-data" class="nav-section">
+        <h3>💾 資料管理</h3>
+        <div class="card p-3">
+            <div class="d-flex gap-2 mb-3">
+                <button class="btn btn-outline-primary" onclick="exportData()">📤 匯出全系統備份 (Excel)</button>
+                <button class="btn btn-outline-success" onclick="document.getElementById('importFileInput').click()">📥 匯入系統備份 (Excel)</button>
+                <input type="file" id="importFileInput" class="d-none" onchange="importData(this)" accept=".xlsx">
+            </div>
+            <button class="btn btn-outline-danger w-100 mt-2" onclick="clearData()">🗑️ 清除所有資料</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="qrModal" tabindex="-1">
+    <div class="modal-dialog modal-md">
+        <div class="modal-content text-center p-3">
+            <div id="qrCanvasContainer" class="d-flex justify-content-center"></div>
+            <button class="btn btn-sm btn-secondary mt-3" data-bs-dismiss="modal">關閉</button>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="historyModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5 id="historyTitle">進出詳細紀錄</h5></div>
+            <div class="modal-body" id="historyBody"></div>
+            <div class="modal-footer"><button class="btn btn-secondary" data-bs-dismiss="modal">關閉</button></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="tempUserModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header"><h5>建立臨時進出</h5><button type="button" class="btn-close" data-bs-dismiss="modal"></button></div>
+            <div class="modal-body text-center">
+                <input type="text" class="form-control mb-2" id="tempName" placeholder="輸入姓名">
+                <button class="btn btn-primary w-100" onclick="generateTempQR()">生成 QR 並報到</button>
+                <div id="tempQrContainer" class="mt-3 d-flex justify-content-center"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    let db = { events: [] };
+    let currentEventId = null;
+    let html5QrcodeScanner = null;
+    let lastScanTime = 0;
+    const audioBeep = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+
+    window.onload = function() {
+        const saved = localStorage.getItem('eventSystemDB');
+        if (saved) db = JSON.parse(saved);
+        renderEventList();
+    };
+
+    function saveData() { localStorage.setItem('eventSystemDB', JSON.stringify(db)); }
+
+    function showSection(id) {
+        document.querySelectorAll('.nav-section').forEach(d => d.classList.remove('active-section'));
+        document.getElementById(id).classList.add('active-section');
+        if(id === 'section-list') renderEventList();
+    }
+
+    function syncEndDate() {
+        const start = document.getElementById('startDate').value;
+        const end = document.getElementById('endDate');
+        end.min = start;
+        if (end.value < start) end.value = start;
+    }
+
+    async function createLabeledQR(evt, p, qrSize = 300) {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        const textHeight = 90; 
+        const padding = 20;
+        canvas.width = qrSize + padding * 2;
+        canvas.height = qrSize + textHeight + padding * 2;
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        const tempQr = new QRious({
+            value: JSON.stringify({ eid: evt.id, uid: p.uid }),
+            size: qrSize,
+            level: 'H'
+        });
+        const img = new Image();
+        img.src = tempQr.toDataURL();
+        await new Promise(res => img.onload = res);
+        ctx.drawImage(img, padding, padding);
+        ctx.fillStyle = "#000000";
+        ctx.textAlign = "center";
+        ctx.font = "bold 18px Arial";
+        ctx.fillText(evt.name, canvas.width / 2, qrSize + padding + 30);
+        ctx.font = "16px Arial";
+        ctx.fillText(`${evt.startDate} ~ ${evt.endDate}`, canvas.width / 2, qrSize + padding + 55);
+        ctx.font = "bold 22px Arial";
+        ctx.fillText(p.name, canvas.width / 2, qrSize + padding + 85);
+        return canvas;
+    }
+
+    // --- 需求 2 修正: 固定排序為 desc (最新在前) ---
+    function renderScanLog() {
+        const evt = db.events.find(e => e.id === currentEventId);
+        const container = document.getElementById('scanLogContainer');
+        container.innerHTML = '';
+        let visitPairs = [];
+        evt.participants.forEach(p => {
+            for (let i = 0; i < p.history.length; i++) {
+                if (p.history[i].type === 'in') {
+                    let outEvent = null;
+                    for (let j = i + 1; j < p.history.length; j++) {
+                        if (p.history[j].type === 'out') { outEvent = p.history[j]; break; }
+                    }
+                    visitPairs.push({
+                        name: p.name, class: p.class, seat: p.seat,
+                        inTime: p.history[i].time,
+                        outTime: outEvent ? outEvent.time : null,
+                        timestamp: new Date(p.history[i].time).getTime()
+                    });
+                }
+            }
+        });
+        // 固定排序: 最新在前
+        visitPairs.sort((a, b) => b.timestamp - a.timestamp);
+        
+        visitPairs.forEach(v => {
+            const html = `
+                <div class="log-row">
+                    <div class="log-col border-end" style="flex: 0.4;">
+                        <b>${v.name}</b><br><small class="text-muted">${v.class}-${v.seat}</small>
+                    </div>
+                    <div class="log-col text-success">
+                        ${v.inTime ? `<span class="dot bg-in"></span>入: ${v.inTime.split(' ')[1]}` : '--'}
+                    </div>
+                    <div class="log-col text-danger">
+                        ${v.outTime ? `<span class="dot bg-out"></span>出: ${v.outTime.split(' ')[1]}` : '--'}
+                    </div>
+                </div>`;
+            container.innerHTML += html;
+        });
+    }
+
+    function openTempModal() {
+        document.getElementById('tempQrContainer').innerHTML = '';
+        document.getElementById('tempName').value = '';
+        new bootstrap.Modal(document.getElementById('tempUserModal')).show();
+    }
+
+    async function generateTempQR() {
+        const nameInput = document.getElementById('tempName');
+        const name = nameInput.value.trim();
+        if(!name) return alert('請輸入姓名');
+        const uid = 'T' + Date.now();
+        const evt = db.events.find(e => e.id === currentEventId);
+        const tempCount = evt.participants.filter(p => p.class === '臨時').length;
+        const newSeat = tempCount + 1;
+        const newPerson = { uid, class: '臨時', seat: newSeat, name, status: 'out', history: [] };
+        evt.participants.push(newPerson);
+        const canvas = await createLabeledQR(evt, newPerson, 200);
+        document.getElementById('tempQrContainer').innerHTML = '';
+        document.getElementById('tempQrContainer').appendChild(canvas);
+        saveData(); updateInVenueCount(); viewEvent(currentEventId);
+    }
+
+    function renderEventList() {
+        const container = document.getElementById('eventListContainer');
+        container.innerHTML = db.events.map((evt, idx) => `
+            <div class="col-md-6 mb-3">
+                <div class="card shadow-sm border-primary">
+                    <div class="card-body">
+                        <h4 class="card-title text-primary">${evt.name}</h4>
+                        <p class="mb-1">📅 ${evt.startDate} ~ ${evt.endDate}</p>
+                        <p class="mb-3 text-muted">👥 參與人數：${evt.participants.length}</p>
+                        <div class="d-flex gap-2">
+                            <button class="btn btn-primary btn-sm" onclick="viewEvent('${evt.id}')">管理人員</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteEvent(${idx})">刪除</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    function viewEvent(id) {
+        currentEventId = id;
+        const evt = db.events.find(e => e.id === id);
+        showSection('section-detail');
+        document.getElementById('detailTitle').innerText = `👥 管理人員：${evt.name}`;
+        const tbody = document.getElementById('participantTableBody');
+        tbody.innerHTML = evt.participants.map(p => `
+            <tr>
+                <td>${p.class}</td><td>${p.seat}</td><td>${p.name}</td>
+                <td><span class="status-badge ${p.status==='in'?'bg-success text-white':'bg-secondary text-white'}">${p.status==='in'?'場內':'場外'}</span></td>
+                <td><button class="btn btn-sm btn-outline-primary" onclick="showPersonQR('${p.uid}')">QR</button></td>
+            </tr>
+        `).join('');
+    }
+
+    async function showPersonQR(uid) {
+        const evt = db.events.find(e => e.id === currentEventId);
+        const p = evt.participants.find(part => part.uid === uid);
+        const container = document.getElementById('qrCanvasContainer');
+        container.innerHTML = "產生中...";
+        const canvas = await createLabeledQR(evt, p, 300);
+        container.innerHTML = "";
+        canvas.style.maxWidth = "100%";
+        container.appendChild(canvas);
+        new bootstrap.Modal(document.getElementById('qrModal')).show();
+    }
+
+    async function downloadAllQRs() {
+        const evt = db.events.find(e => e.id === currentEventId);
+        const zip = new JSZip();
+        for (let p of evt.participants) {
+            const canvas = await createLabeledQR(evt, p, 400);
+            zip.file(`${p.class}${p.seat}_${p.name}.png`, canvas.toDataURL("image/png").split(',')[1], {base64: true});
+        }
+        zip.generateAsync({type:"blob"}).then(c => saveAs(c, `${evt.name}_QRs.zip`));
+    }
+
+    function exportData() {
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([[JSON.stringify(db)]]), "Backup");
+        XLSX.writeFile(wb, "系統備份_" + new Date().getTime() + ".xlsx");
+    }
+
+    function importData(input) {
+        const file = input.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const jsonStr = workbook.Sheets[workbook.SheetNames[0]]['A1'].v;
+                const importedDb = JSON.parse(jsonStr);
+                if (confirm('確定要匯入此備份檔嗎？這將覆蓋目前系統內的所有資料。')) {
+                    db = importedDb;
+                    saveData(); renderEventList();
+                    alert('資料匯入成功！');
+                }
+            } catch (err) { alert('匯入失敗：檔案格式不正確。'); }
+            input.value = '';
+        };
+        reader.readAsArrayBuffer(file);
+    }
+
+    function startControlMode() {
+        const evt = db.events.find(e => e.id === currentEventId);
+        document.getElementById('scanEventTitle').innerText = evt.name;
+        showSection('section-scan'); renderScanLog(); updateInVenueCount();
+        html5QrcodeScanner = new Html5Qrcode("reader");
+        html5QrcodeScanner.start({ facingMode: "environment" }, { fps: 15, qrbox: 250 }, onScanSuccess);
+    }
+
+    function onScanSuccess(text) {
+        const now = Date.now(); if (now - lastScanTime < 2000) return;
+        try {
+            const data = JSON.parse(text); if (data.eid !== currentEventId) return;
+            const evt = db.events.find(e => e.id === currentEventId);
+            const person = evt.participants.find(p => p.uid === data.uid); if (!person) return;
+            person.status = (person.status === 'out') ? 'in' : 'out';
+            person.history.push({ type: person.status, time: new Date().toLocaleString() });
+            saveData(); audioBeep.play(); renderScanLog(); updateInVenueCount();
+            lastScanTime = now;
+        } catch (e) { }
+    }
+
+    function updateInVenueCount() {
+        const evt = db.events.find(e => e.id === currentEventId);
+        document.getElementById('inVenueCount').innerText = evt.participants.filter(p => p.status === 'in').length;
+    }
+
+    // --- 需求 1 修正: 即時狀態表增加查詢動作 ---
+    function showAllStatus() {
+        showSection('section-all-status');
+        const evt = db.events.find(e => e.id === currentEventId);
+        const inCount = evt.participants.filter(p => p.status === 'in').length;
+        document.getElementById('statusPageTitle').innerHTML = `📋 即時狀態 <span class="badge bg-success">場內: ${inCount}</span>`;
+        document.getElementById('statusTableBody').innerHTML = evt.participants.map(p => `
+            <tr>
+                <td>${p.name} (${p.class}-${p.seat})</td>
+                <td>${p.history.length > 0 ? (p.status === 'in' ? '🟢 進入' : '🔴 離開') : '⚪ 未到'}</td>
+                <td>${p.history.length > 0 ? p.history[p.history.length-1].time : '--'}</td>
+                <td>
+                    <button class="btn btn-sm btn-info text-white" onclick="showHistory('${p.uid}')">查詢</button>
+                    <button class="btn btn-sm btn-outline-primary" onclick="showPersonQR('${p.uid}')">QR</button>
+                </td>
+            </tr>`).join('');
+    }
+
+    function showHistory(uid) {
+        const evt = db.events.find(e => e.id === currentEventId);
+        const p = evt.participants.find(p => p.uid === uid);
+        document.getElementById('historyTitle').innerText = `${p.name} 的歷史紀錄`;
+        document.getElementById('historyBody').innerHTML = p.history.map(h => `<div class="border-bottom py-1">${h.type==='in'?'🟢 進入':'🔴 離開'} - ${h.time}</div>`).join('') || '尚無紀錄';
+        new bootstrap.Modal(document.getElementById('historyModal')).show();
+    }
+
+    async function saveEvent() {
+        const name = document.getElementById('eventName').value.trim();
+        const start = document.getElementById('startDate').value;
+        const end = document.getElementById('endDate').value;
+        if (!name || !start || !end) return alert('請填寫完整資訊');
+        const fileInput = document.getElementById('participantFile');
+        let participants = [];
+        if (fileInput.files.length > 0) {
+            participants = await new Promise(resolve => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+                    const res = [];
+                    for (let i = 1; i < json.length; i++) {
+                        if (json[i][2]) res.push({ uid: 'P'+Date.now()+i, class: String(json[i][0]||''), seat: String(json[i][1]||''), name: String(json[i][2]), status: 'out', history: [] });
+                    }
+                    resolve(res);
+                };
+                reader.readAsArrayBuffer(fileInput.files[0]);
+            });
+        }
+        db.events.push({ id: 'E' + Date.now(), name, startDate: start, endDate: end, participants });
+        saveData(); showSection('section-list');
+    }
+
+    function exitControlMode() { if(html5QrcodeScanner) html5QrcodeScanner.stop().then(()=>html5QrcodeScanner.clear()); showSection('section-detail'); }
+    function deleteEvent(idx) { if(confirm('確定刪除？')) { db.events.splice(idx, 1); saveData(); renderEventList(); } }
+    function clearData() { if(confirm('清除所有？')) { localStorage.clear(); location.reload(); } }
+</script>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
